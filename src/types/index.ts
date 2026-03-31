@@ -20,17 +20,16 @@ export interface Participant {
 export interface Decision {
   id: string
   event_id: string
-  title: string
-  description: string | null
-  status: 'open' | 'closed'
+  question: string
+  is_locked: boolean
+  allow_multiple_votes: boolean
   created_at: string
 }
 
 export interface DecisionOption {
   id: string
   decision_id: string
-  title: string
-  votes_count: number
+  label: string
 }
 
 export interface Vote {

@@ -16,7 +16,7 @@ export default function EventBoard() {
     fetchExpenses(id)
   }, [id])
 
-  const openDecisions = decisions.filter((d) => d.status === 'open').length
+  const openDecisions = decisions.filter((d) => !d.is_locked).length
   const pendingAssignments = assignments.filter((a) => a.status !== 'done').length
   const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0)
 
@@ -25,7 +25,7 @@ export default function EventBoard() {
       <div className="p-4 space-y-4">
         <div className="grid grid-cols-3 gap-3">
           <StatCard label="People" value={participants.length} />
-          <StatCard label="Open polls" value={openDecisions} />
+          <StatCard label="Decisions" value={openDecisions} />
           <StatCard label="Tasks left" value={pendingAssignments} />
         </div>
 
@@ -35,9 +35,9 @@ export default function EventBoard() {
           ) : (
             decisions.slice(0, 3).map((d) => (
               <div key={d.id} className="flex items-center justify-between py-2.5 border-b border-gray-100 last:border-0">
-                <span className="text-sm text-gray-800 truncate pr-2">{d.title}</span>
-                <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${d.status === 'open' ? 'bg-accent-100 text-accent-700' : 'bg-gray-100 text-gray-500'}`}>
-                  {d.status}
+                <span className="text-sm text-gray-800 truncate pr-2">{d.question}</span>
+                <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${!d.is_locked ? 'bg-accent-100 text-accent-700' : 'bg-gray-100 text-gray-500'}`}>
+                  {d.is_locked ? 'decided' : 'open'}
                 </span>
               </div>
             ))
