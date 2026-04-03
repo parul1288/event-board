@@ -11,7 +11,6 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const { id } = useParams<{ id: string }>()
   const currentEvent = useEventStore((s) => s.currentEvent)
-  const currentParticipantId = useEventStore((s) => s.currentParticipantId)
   const clearEvent = useEventStore((s) => s.clearEvent)
   const navigate = useNavigate()
   const { user, signOut } = useAuth()

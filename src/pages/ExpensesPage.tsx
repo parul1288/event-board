@@ -150,7 +150,6 @@ export default function ExpensesPage() {
                   {balances.map((b) => {
                     const isOwed = b.net > 0.005
                     const owes = b.net < -0.005
-                    const settled = !isOwed && !owes
 
                     return (
                       <div key={b.id} className="px-4 py-3 flex items-center gap-3">

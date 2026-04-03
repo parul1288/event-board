@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useEventStore } from '../store/eventStore'
 import { useAuth } from '../hooks/useAuth'
 import Layout from '../components/Layout'
-import type { Assignment, TaskCategory } from '../types'
+import type { Assignment, Participant, TaskCategory } from '../types'
 
 const CATEGORIES: TaskCategory[] = ['Food', 'Decor', 'Supplies', 'Logistics', 'Other']
 

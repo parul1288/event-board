@@ -86,7 +86,7 @@ export default function HomePage() {
     })
 
     const cards: UserEvent[] = active.map((p) => {
-      const ev = p.events as { id: string; name: string; date: string | null; created_by_auth_id: string | null }
+      const ev = p.events as unknown as { id: string; name: string; date: string | null; created_by_auth_id: string | null }
       return {
         eventId: p.event_id,
         name: ev?.name ?? 'Unknown event',

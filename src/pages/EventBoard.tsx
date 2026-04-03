@@ -48,7 +48,6 @@ export default function EventBoard() {
     decisionVotes,
     assignments,
     expenses,
-    currentParticipantId,
     fetchEvent,
     fetchParticipants,
     fetchDecisions,

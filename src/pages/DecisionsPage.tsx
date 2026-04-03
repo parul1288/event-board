@@ -1,9 +1,10 @@
-import { useEffect, useState, useRef, KeyboardEvent } from 'react'
+import { useEffect, useState, useRef } from 'react'
+import type { KeyboardEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useEventStore } from '../store/eventStore'
 import { useAuth } from '../hooks/useAuth'
 import Layout from '../components/Layout'
-import type { Decision, DecisionOption } from '../types'
+import type { Decision, DecisionOption, Vote } from '../types'
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -224,7 +225,7 @@ export default function DecisionsPage() {
 interface DecisionCardProps {
   decision: Decision
   options: DecisionOption[]
-  allVotes: ReturnType<typeof useEventStore>['decisionVotes']
+  allVotes: Vote[]
   currentParticipantId: string | null
   participantCount: number
   isExpanded: boolean
