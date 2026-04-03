@@ -1,10 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useEventStore } from '../store/eventStore'
-import { supabase } from '../lib/supabase'
-import { participantKey, creatorKey } from '../lib/storage'
+import { useAuth } from '../hooks/useAuth'
 import Layout from '../components/Layout'
-import WhoAreYouModal from '../components/WhoAreYouModal'
 import type { Assignment, TaskCategory } from '../types'
 
 const CATEGORIES: TaskCategory[] = ['Food', 'Decor', 'Supplies', 'Logistics', 'Other']
@@ -21,8 +19,8 @@ const CATEGORY_STYLES: Record<TaskCategory, { badge: string; dot: string }> = {
 
 export default function AssignmentsPage() {
   const { id: eventId } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const {
-    currentEvent,
     assignments,
     participants,
     tasksLoading,
@@ -37,55 +35,33 @@ export default function AssignmentsPage() {
     deleteTask,
   } = useEventStore()
 
+  const { user } = useAuth()
+
   const [showNewTask, setShowNewTask] = useState(false)
-  const [showWhoAreYou, setShowWhoAreYou] = useState(false)
-  const [pendingAssignId, setPendingAssignId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!eventId) return
-    const stored = localStorage.getItem(participantKey(eventId))
-    if (stored) setCurrentParticipant(stored)
     fetchEvent(eventId)
     fetchAssignments(eventId)
-    fetchParticipants(eventId)
+    ;(async () => {
+      await fetchParticipants(eventId)
+      const ps = useEventStore.getState().participants
+      if (user?.id) {
+        const match = ps.find((p) => p.auth_user_id === user.id)
+        if (match) {
+          setCurrentParticipant(match.id)
+          return
+        }
+      }
+      // No match — redirect to board so user can join
+      navigate(`/event/${eventId}`, { replace: true })
+    })()
   }, [eventId])
 
   const currentParticipant = participants.find((p) => p.id === currentParticipantId)
 
-  const handleSelectParticipant = (participantId: string) => {
-    if (!eventId) return
-    localStorage.setItem(participantKey(eventId), participantId)
-    setCurrentParticipant(participantId)
-    // Persist creator status if this participant is the event creator
-    if (currentEvent?.created_by === participantId) {
-      localStorage.setItem(creatorKey(eventId), participantId)
-    }
-    setShowWhoAreYou(false)
-    // If user was trying to self-assign a task, do it now
-    if (pendingAssignId) {
-      assignTask(pendingAssignId, participantId)
-      setPendingAssignId(null)
-    }
-  }
-
-  const handleAddParticipant = async (name: string) => {
-    if (!eventId) return
-    const { data, error } = await supabase
-      .from('participants')
-      .insert({ event_id: eventId, name })
-      .select()
-      .single()
-    if (error || !data) return
-    await fetchParticipants(eventId)
-    handleSelectParticipant(data.id)
-  }
-
   const handleIllDoThis = (assignmentId: string) => {
-    if (!currentParticipantId) {
-      setPendingAssignId(assignmentId)
-      setShowWhoAreYou(true)
-      return
-    }
+    if (!currentParticipantId) return
     assignTask(assignmentId, currentParticipantId)
   }
 
@@ -111,43 +87,16 @@ export default function AssignmentsPage() {
         )}
 
         {/* Identity strip */}
-        {currentParticipant ? (
-          <div className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-2.5">
-            <div className="flex items-center gap-2">
-              <span className="w-7 h-7 rounded-full bg-accent-100 text-accent-700 text-xs font-bold flex items-center justify-center shrink-0">
-                {currentParticipant.name[0].toUpperCase()}
-              </span>
-              <span className="text-sm text-gray-600">
-                Signed in as{' '}
-                <span className="font-semibold text-gray-900">{currentParticipant.name}</span>
-              </span>
-            </div>
-            <button
-              onClick={() => {
-                if (eventId) localStorage.removeItem(participantKey(eventId))
-                setCurrentParticipant(null)
-              }}
-              className="text-xs text-gray-400 hover:text-gray-500 transition-colors"
-            >
-              not you?
-            </button>
+        {currentParticipant && (
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-4 py-2.5">
+            <span className="w-7 h-7 rounded-full bg-accent-100 text-accent-700 text-xs font-bold flex items-center justify-center shrink-0">
+              {currentParticipant.name[0].toUpperCase()}
+            </span>
+            <span className="text-sm text-gray-600">
+              Signed in as{' '}
+              <span className="font-semibold text-gray-900">{currentParticipant.name}</span>
+            </span>
           </div>
-        ) : (
-          <button
-            onClick={() => setShowWhoAreYou(true)}
-            className="w-full flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-left"
-          >
-            <svg className="w-5 h-5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-            </svg>
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-amber-800">Who are you?</p>
-              <p className="text-xs text-amber-600">Tap to identify yourself and claim tasks</p>
-            </div>
-            <svg className="w-4 h-4 text-amber-400 shrink-0 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
         )}
 
         {/* Header */}
@@ -249,16 +198,6 @@ export default function AssignmentsPage() {
         />
       )}
 
-      <WhoAreYouModal
-        isOpen={showWhoAreYou}
-        onClose={() => {
-          setShowWhoAreYou(false)
-          setPendingAssignId(null)
-        }}
-        participants={participants}
-        onSelect={handleSelectParticipant}
-        onAdd={handleAddParticipant}
-      />
     </Layout>
   )
 }

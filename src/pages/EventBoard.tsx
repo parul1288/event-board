@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useEventStore } from '../store/eventStore'
 import { supabase } from '../lib/supabase'
-import { participantKey, creatorKey } from '../lib/storage'
+import { useAuth } from '../hooks/useAuth'
 import Layout from '../components/Layout'
-import WhoAreYouModal from '../components/WhoAreYouModal'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -58,57 +57,109 @@ export default function EventBoard() {
     setCurrentParticipant,
   } = useEventStore()
 
+  const { user } = useAuth()
+
   const [showDetails, setShowDetails] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [showIdentity, setShowIdentity] = useState(false)
+  // 'board' = show board, 'join' = show join screen, 'error' = not found / no access
+  const [view, setView] = useState<'board' | 'join' | 'error'>('board')
+  const [joinLoading, setJoinLoading] = useState(false)
+  const [joinError, setJoinError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
     setLoading(true)
-    // Restore identity from localStorage
-    const stored = localStorage.getItem(participantKey(id))
-    if (stored) setCurrentParticipant(stored)
     Promise.all([
       fetchEvent(id),
       fetchParticipants(id),
       fetchDecisions(id),
       fetchAssignments(id),
       fetchExpenses(id),
-    ]).finally(() => {
+    ]).then(() => {
+      const ps = useEventStore.getState().participants
+      // Match active participant by auth_user_id (is_active !== false)
+      if (user?.id) {
+        const match = ps.find((p) => p.auth_user_id === user.id && p.is_active !== false)
+        if (match) {
+          setCurrentParticipant(match.id)
+          setView('board')
+          setLoading(false)
+          return
+        }
+      }
+      // No active participant found — show join screen
+      setView('join')
       setLoading(false)
-      // Show identity gate if visitor has no stored identity (e.g. joined via code)
-      if (!stored) setShowIdentity(true)
     })
   }, [id])
 
-  // Persist creator status whenever event data confirms it
-  useEffect(() => {
-    if (!id || !currentParticipantId || !currentEvent?.created_by) return
-    if (currentEvent.created_by === currentParticipantId) {
-      localStorage.setItem(creatorKey(id), currentParticipantId)
-    }
-  }, [currentEvent?.created_by, currentParticipantId, id])
+  const handleJoin = async (name: string) => {
+    if (!id || !user || !name.trim()) return
+    setJoinLoading(true)
+    setJoinError(null)
 
-  const handleSelectParticipant = (participantId: string) => {
-    if (!id) return
-    localStorage.setItem(participantKey(id), participantId)
-    setCurrentParticipant(participantId)
-    if (currentEvent?.created_by === participantId) {
-      localStorage.setItem(creatorKey(id), participantId)
-    }
-    setShowIdentity(false)
-  }
+    const trimmedName = name.trim()
 
-  const handleAddParticipant = async (name: string) => {
-    if (!id) return
+    // 1. Check if this auth user already has a record (active or inactive)
+    const { data: existing } = await supabase
+      .from('participants')
+      .select('*')
+      .eq('event_id', id)
+      .eq('auth_user_id', user.id)
+      .maybeSingle()
+
+    if (existing) {
+      // Reactivate if they previously left
+      if (existing.is_active === false) {
+        await supabase
+          .from('participants')
+          .update({ is_active: true, name: trimmedName })
+          .eq('id', existing.id)
+      }
+      await fetchParticipants(id)
+      setCurrentParticipant(existing.id)
+      setView('board')
+      setJoinLoading(false)
+      return
+    }
+
+    // 2. Claim an unlinked record with the same name (no auth_user_id)
+    const { data: nameless } = await supabase
+      .from('participants')
+      .select('*')
+      .eq('event_id', id)
+      .eq('name', trimmedName)
+      .is('auth_user_id', null)
+      .maybeSingle()
+
+    if (nameless) {
+      await supabase
+        .from('participants')
+        .update({ auth_user_id: user.id, is_active: true })
+        .eq('id', nameless.id)
+      await fetchParticipants(id)
+      setCurrentParticipant(nameless.id)
+      setView('board')
+      setJoinLoading(false)
+      return
+    }
+
+    // 3. Create a fresh participant record
     const { data, error } = await supabase
       .from('participants')
-      .insert({ event_id: id, name })
+      .insert({ event_id: id, name: trimmedName, auth_user_id: user.id, is_active: true })
       .select()
       .single()
-    if (error || !data) return
+
+    if (error || !data) {
+      setJoinError("Couldn't join. Please try again.")
+      setJoinLoading(false)
+      return
+    }
     await fetchParticipants(id)
-    handleSelectParticipant(data.id)
+    setCurrentParticipant(data.id)
+    setView('board')
+    setJoinLoading(false)
   }
 
   // ── Stats ────────────────────────────────────────────────────────────────
@@ -185,6 +236,31 @@ export default function EventBoard() {
   const recentActivity = activityItems
     .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
     .slice(0, 5)
+
+  const authDefaultName =
+    ((user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? '') as string)
+      .split(' ')[0]
+      .trim() || user?.email?.split('@')[0] || ''
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <span className="w-6 h-6 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (view === 'join') {
+    return (
+      <JoinScreen
+        eventName={useEventStore.getState().currentEvent?.name ?? 'this event'}
+        defaultName={authDefaultName}
+        onJoin={handleJoin}
+        loading={joinLoading}
+        error={joinError}
+      />
+    )
+  }
 
   return (
     <Layout>
@@ -286,17 +362,6 @@ export default function EventBoard() {
         )}
       </div>
 
-      {/* ── Identity gate (shown after joining when no stored participant) ───── */}
-      <WhoAreYouModal
-        isOpen={showIdentity}
-        onClose={() => setShowIdentity(false)}
-        participants={participants}
-        onSelect={handleSelectParticipant}
-        onAdd={handleAddParticipant}
-        required
-        subtitle="Select your name to get started with this event"
-      />
-
       {/* ── Local event details modal (triggered by details bar) ─────────────── */}
       <div
         className={`fixed inset-0 bg-black/40 z-40 transition-opacity duration-200 ${
@@ -329,6 +394,92 @@ export default function EventBoard() {
         </div>
       </div>
     </Layout>
+  )
+}
+
+// ─── Join screen ──────────────────────────────────────────────────────────────
+
+function JoinScreen({
+  eventName,
+  defaultName,
+  onJoin,
+  loading,
+  error,
+}: {
+  eventName: string
+  defaultName: string
+  onJoin: (name: string) => void
+  loading: boolean
+  error: string | null
+}) {
+  const [name, setName] = useState(defaultName)
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Minimal header */}
+      <header className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-sm font-semibold text-accent-600 shrink-0">Event Board</span>
+          <svg className="w-3.5 h-3.5 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+          <span className="text-sm font-semibold text-gray-900 truncate">{eventName}</span>
+        </div>
+      </header>
+
+      <div className="flex-1 flex items-center justify-center px-4">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-6">
+            <div className="w-14 h-14 rounded-2xl bg-accent-100 flex items-center justify-center mx-auto mb-4">
+              <svg className="w-7 h-7 text-accent-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </div>
+            <p className="text-base text-gray-500">You're joining</p>
+            <h1 className="text-xl font-bold text-gray-900 mt-1">{eventName}</h1>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">
+                What should we call you?
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    if (name.trim()) onJoin(name.trim())
+                  }
+                }}
+                placeholder="Your name"
+                autoFocus
+                className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent transition-colors"
+              />
+            </div>
+
+            {error && <p className="text-xs text-red-500">{error}</p>}
+
+            <button
+              onClick={() => { if (name.trim()) onJoin(name.trim()) }}
+              disabled={!name.trim() || loading}
+              className="w-full py-3 bg-accent-600 hover:bg-accent-700 active:bg-accent-800 disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+                  Joining…
+                </>
+              ) : (
+                'Join Event'
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 

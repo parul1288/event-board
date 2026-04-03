@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useParams, NavLink, Link, useNavigate } from 'react-router-dom'
 import { useEventStore } from '../store/eventStore'
+import { useAuth } from '../hooks/useAuth'
+import { supabase } from '../lib/supabase'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -9,11 +11,56 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const { id } = useParams<{ id: string }>()
   const currentEvent = useEventStore((s) => s.currentEvent)
+  const currentParticipantId = useEventStore((s) => s.currentParticipantId)
+  const clearEvent = useEventStore((s) => s.clearEvent)
   const navigate = useNavigate()
+  const { user, signOut } = useAuth()
+
+  const authDisplayName =
+    ((user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? '') as string).trim() ||
+    user?.email?.split('@')[0] ||
+    null
+
+  const isCreator = !!(user && currentEvent?.created_by_auth_id === user.id)
 
   const [showMenu, setShowMenu] = useState(false)
   const [showDetails, setShowDetails] = useState(false)
   const [copied, setCopied] = useState(false)
+  // Leave confirmation
+  const [leaveConfirm, setLeaveConfirm] = useState(false)
+  // Delete confirmation: 0 = button, 1 = warning+confirm
+  const [deleteStep, setDeleteStep] = useState(0)
+  const [actionLoading, setActionLoading] = useState(false)
+
+  const closeMenu = () => {
+    setShowMenu(false)
+    setLeaveConfirm(false)
+    setDeleteStep(0)
+  }
+
+  const handleLeave = async () => {
+    if (!id || !user?.id) return
+    setActionLoading(true)
+    await supabase
+      .from('participants')
+      .update({ is_active: false })
+      .eq('auth_user_id', user.id)
+      .eq('event_id', id)
+    setActionLoading(false)
+    clearEvent()
+    closeMenu()
+    navigate('/', { replace: true })
+  }
+
+  const handleDelete = async () => {
+    if (!id) return
+    setActionLoading(true)
+    await supabase.from('events').delete().eq('id', id)
+    setActionLoading(false)
+    clearEvent()
+    closeMenu()
+    navigate('/', { replace: true })
+  }
 
   const handleCopyLink = async () => {
     const url = `${window.location.origin}/event/${id}`
@@ -146,7 +193,7 @@ export default function Layout({ children }: LayoutProps) {
         className={`fixed inset-0 bg-black/40 z-20 transition-opacity duration-200 ${
           showMenu ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
-        onClick={() => setShowMenu(false)}
+        onClick={closeMenu}
       />
       <div
         className={`fixed bottom-0 inset-x-0 bg-white rounded-t-2xl z-30 transition-transform duration-300 ease-out ${
@@ -158,6 +205,18 @@ export default function Layout({ children }: LayoutProps) {
         </div>
 
         <div className="px-4 pt-2 pb-8 space-y-1">
+          {/* Signed-in user */}
+          {(authDisplayName || user?.email) && (
+            <div className="px-4 py-3 mb-1 border-b border-gray-100">
+              {authDisplayName && (
+                <p className="text-sm font-semibold text-gray-900 truncate">{authDisplayName}</p>
+              )}
+              {user?.email && (
+                <p className="text-xs text-gray-400 mt-0.5 truncate">{user.email}</p>
+              )}
+            </div>
+          )}
+
           {/* Participants */}
           <button
             onClick={() => { navigate(`/event/${id}/participants`); setShowMenu(false) }}
@@ -201,6 +260,114 @@ export default function Layout({ children }: LayoutProps) {
             <svg className="w-4 h-4 text-gray-400 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
+          </button>
+
+          {/* Divider */}
+          <div className="h-px bg-gray-100 my-1" />
+
+          {/* ── Leave / Delete event ─────────────────────────────────────────── */}
+          {isCreator ? (
+            /* Creator: Delete event (two-step) */
+            deleteStep === 0 ? (
+              <button
+                onClick={() => setDeleteStep(1)}
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-red-50 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center shrink-0">
+                  <svg className="w-4 h-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </span>
+                <span className="text-sm font-medium text-red-600">Delete event</span>
+              </button>
+            ) : (
+              <div className="px-4 py-3 space-y-3 bg-red-50 rounded-xl mx-0">
+                <p className="text-xs font-semibold text-red-700">Delete this event?</p>
+                <p className="text-xs text-red-600 leading-relaxed">
+                  This will permanently delete the event, all decisions, tasks and expenses. This cannot be undone.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setDeleteStep(0)}
+                    disabled={actionLoading}
+                    className="flex-1 py-2 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-white transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDelete}
+                    disabled={actionLoading}
+                    className="flex-1 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
+                  >
+                    {actionLoading ? (
+                      <span className="w-3 h-3 border border-white/50 border-t-white rounded-full animate-spin" />
+                    ) : null}
+                    Yes, delete everything
+                  </button>
+                </div>
+              </div>
+            )
+          ) : (
+            /* Non-creator: Leave event */
+            leaveConfirm ? (
+              <div className="px-4 py-3 space-y-3 bg-amber-50 rounded-xl mx-0">
+                <p className="text-xs font-semibold text-amber-800">Leave this event?</p>
+                <p className="text-xs text-amber-700 leading-relaxed">
+                  Your contributions will remain visible to the group but you'll lose access.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setLeaveConfirm(false)}
+                    disabled={actionLoading}
+                    className="flex-1 py-2 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg hover:bg-white transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleLeave}
+                    disabled={actionLoading}
+                    className="flex-1 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
+                  >
+                    {actionLoading ? (
+                      <span className="w-3 h-3 border border-white/50 border-t-white rounded-full animate-spin" />
+                    ) : null}
+                    Yes, leave
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setLeaveConfirm(true)}
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-amber-50 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-full bg-amber-50 flex items-center justify-center shrink-0">
+                  <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  </svg>
+                </span>
+                <span className="text-sm font-medium text-amber-700">Leave event</span>
+              </button>
+            )
+          )}
+
+          {/* Divider */}
+          <div className="h-px bg-gray-100 my-1" />
+
+          {/* Sign out */}
+          <button
+            onClick={async () => {
+              closeMenu()
+              await signOut()
+              navigate('/login', { replace: true })
+            }}
+            className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl hover:bg-red-50 transition-colors text-left"
+          >
+            <span className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center shrink-0">
+              <svg className="w-4 h-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </span>
+            <span className="text-sm font-medium text-red-600">Sign out</span>
           </button>
         </div>
       </div>

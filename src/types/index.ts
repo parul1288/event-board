@@ -7,6 +7,7 @@ export interface Event {
   location: string | null
   guest_count: number | null
   created_by: string | null
+  created_by_auth_id: string | null
   created_at: string
 }
 
@@ -15,6 +16,8 @@ export interface Participant {
   event_id: string
   name: string
   email: string | null
+  auth_user_id: string | null
+  is_active: boolean | null
   created_at: string
 }
 

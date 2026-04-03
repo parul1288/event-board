@@ -1,16 +1,15 @@
 import { useEffect, useState, useRef, KeyboardEvent } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useEventStore } from '../store/eventStore'
-import { supabase } from '../lib/supabase'
-import { participantKey, creatorKey } from '../lib/storage'
+import { useAuth } from '../hooks/useAuth'
 import Layout from '../components/Layout'
-import WhoAreYouModal from '../components/WhoAreYouModal'
 import type { Decision, DecisionOption } from '../types'
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DecisionsPage() {
   const { id: eventId } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const {
     currentEvent,
     decisions,
@@ -26,22 +25,16 @@ export default function DecisionsPage() {
     setCurrentParticipant,
   } = useEventStore()
 
-  // Creator detection: check localStorage key first, then fall back to currentEvent.created_by
-  const storedCreatorId = eventId ? localStorage.getItem(creatorKey(eventId)) : null
-  const isCreator =
-    !!currentParticipantId &&
-    !!(storedCreatorId === currentParticipantId || currentEvent?.created_by === currentParticipantId)
+  const { user } = useAuth()
 
-  // Persist creator status to localStorage whenever we can confirm it via the event record
-  useEffect(() => {
-    if (!eventId || !currentParticipantId || !currentEvent?.created_by) return
-    if (currentEvent.created_by === currentParticipantId) {
-      localStorage.setItem(creatorKey(eventId), currentParticipantId)
-    }
-  }, [currentEvent?.created_by, currentParticipantId, eventId])
+  // Auth-based creator detection
+  const isCreator =
+    !!user &&
+    !!(currentEvent?.created_by_auth_id
+      ? currentEvent.created_by_auth_id === user.id
+      : currentParticipantId && currentEvent?.created_by === currentParticipantId)
 
   const [showNewDecision, setShowNewDecision] = useState(false)
-  const [showWhoAreYou, setShowWhoAreYou] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   // Track previous count to auto-expand newly created decision
@@ -53,44 +46,27 @@ export default function DecisionsPage() {
     prevLengthRef.current = decisions.length
   }, [decisions.length])
 
-  // Restore identity from localStorage and fetch data on mount
+  // Fetch data and resolve participant identity on mount
   useEffect(() => {
     if (!eventId) return
-    const stored = localStorage.getItem(participantKey(eventId))
-    if (stored) setCurrentParticipant(stored)
     fetchEvent(eventId)
     fetchDecisions(eventId)
-    fetchParticipants(eventId)
+    ;(async () => {
+      await fetchParticipants(eventId)
+      const ps = useEventStore.getState().participants
+      if (user?.id) {
+        const match = ps.find((p) => p.auth_user_id === user.id)
+        if (match) {
+          setCurrentParticipant(match.id)
+          return
+        }
+      }
+      // No match — redirect to board so user can join
+      navigate(`/event/${eventId}`, { replace: true })
+    })()
   }, [eventId])
 
   const currentParticipant = participants.find((p) => p.id === currentParticipantId)
-
-  const handleVoteAttempt = () => {
-    if (!currentParticipantId) setShowWhoAreYou(true)
-  }
-
-  const handleSelectParticipant = (participantId: string) => {
-    if (!eventId) return
-    localStorage.setItem(participantKey(eventId), participantId)
-    setCurrentParticipant(participantId)
-    // Persist creator status if this participant is the event creator
-    if (currentEvent?.created_by === participantId) {
-      localStorage.setItem(creatorKey(eventId), participantId)
-    }
-    setShowWhoAreYou(false)
-  }
-
-  const handleAddParticipant = async (name: string) => {
-    if (!eventId) return
-    const { data, error } = await supabase
-      .from('participants')
-      .insert({ event_id: eventId, name })
-      .select()
-      .single()
-    if (error || !data) return
-    await fetchParticipants(eventId)
-    handleSelectParticipant(data.id)
-  }
 
   const open = decisions.filter((d) => !d.is_locked)
   const decided = decisions.filter((d) => d.is_locked)
@@ -102,43 +78,16 @@ export default function DecisionsPage() {
     <Layout>
       <div className="p-4 pb-6 space-y-4">
         {/* Identity strip */}
-        {currentParticipant ? (
-          <div className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-2.5">
-            <div className="flex items-center gap-2">
-              <span className="w-7 h-7 rounded-full bg-accent-100 text-accent-700 text-xs font-bold flex items-center justify-center shrink-0">
-                {currentParticipant.name[0].toUpperCase()}
-              </span>
-              <span className="text-sm text-gray-600">
-                Voting as{' '}
-                <span className="font-semibold text-gray-900">{currentParticipant.name}</span>
-              </span>
-            </div>
-            <button
-              onClick={() => {
-                if (eventId) localStorage.removeItem(participantKey(eventId))
-                setCurrentParticipant(null)
-              }}
-              className="text-xs text-gray-400 hover:text-gray-500 transition-colors"
-            >
-              not you?
-            </button>
+        {currentParticipant && (
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-4 py-2.5">
+            <span className="w-7 h-7 rounded-full bg-accent-100 text-accent-700 text-xs font-bold flex items-center justify-center shrink-0">
+              {currentParticipant.name[0].toUpperCase()}
+            </span>
+            <span className="text-sm text-gray-600">
+              Voting as{' '}
+              <span className="font-semibold text-gray-900">{currentParticipant.name}</span>
+            </span>
           </div>
-        ) : (
-          <button
-            onClick={() => setShowWhoAreYou(true)}
-            className="w-full flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-left"
-          >
-            <svg className="w-5 h-5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-            </svg>
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-amber-800">Who are you?</p>
-              <p className="text-xs text-amber-600">Tap to identify yourself and vote</p>
-            </div>
-            <svg className="w-4 h-4 text-amber-400 shrink-0 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
         )}
 
         {/* Fetch error */}
@@ -223,7 +172,7 @@ export default function DecisionsPage() {
                   participantCount={participants.length}
                   isExpanded={expandedId === d.id}
                   onToggle={() => handleToggle(d.id)}
-                  onVoteAttempt={handleVoteAttempt}
+                  onVoteAttempt={() => {}}
                   isCreator={isCreator}
                 />
               ))}
@@ -248,7 +197,7 @@ export default function DecisionsPage() {
                   participantCount={participants.length}
                   isExpanded={expandedId === d.id}
                   onToggle={() => handleToggle(d.id)}
-                  onVoteAttempt={handleVoteAttempt}
+                  onVoteAttempt={() => {}}
                   isCreator={isCreator}
                 />
               ))}
@@ -266,13 +215,6 @@ export default function DecisionsPage() {
         />
       )}
 
-      <WhoAreYouModal
-        isOpen={showWhoAreYou}
-        onClose={() => setShowWhoAreYou(false)}
-        participants={participants}
-        onSelect={handleSelectParticipant}
-        onAdd={handleAddParticipant}
-      />
     </Layout>
   )
 }

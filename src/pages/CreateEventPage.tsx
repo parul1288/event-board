@@ -1,10 +1,19 @@
-import { useState, useRef, useEffect, KeyboardEvent } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { upsertVisited, NAME_KEY, participantKey, creatorKey } from '../lib/storage'
+import { useAuth } from '../hooks/useAuth'
+
+// Pull first name from Google user metadata (full_name or name), falling back to email prefix.
+function authDisplayName(user: ReturnType<typeof useAuth>['user']): string {
+  if (!user) return ''
+  const full = (user.user_metadata?.full_name ?? user.user_metadata?.name ?? '') as string
+  if (full.trim()) return full.split(' ')[0]
+  return user.email?.split('@')[0] ?? ''
+}
 
 export default function CreateEventPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
 
   // About You
   const [creatorName, setCreatorName] = useState('')
@@ -15,10 +24,6 @@ export default function CreateEventPage() {
   const [location, setLocation] = useState('')
   const [guestCount, setGuestCount] = useState('')
 
-  // Participants
-  const [extraParticipants, setExtraParticipants] = useState<string[]>([])
-  const [participantInput, setParticipantInput] = useState('')
-
   // Form state
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -26,34 +31,12 @@ export default function CreateEventPage() {
 
   const creatorInputRef = useRef<HTMLInputElement>(null)
 
-  // Pre-fill name if already stored
+  // Pre-fill name from Google display name
   useEffect(() => {
-    const stored = localStorage.getItem(NAME_KEY)
-    if (stored) setCreatorName(stored)
+    const authName = authDisplayName(user)
+    if (authName) setCreatorName(authName)
     creatorInputRef.current?.focus()
-  }, [])
-
-  const addParticipant = () => {
-    const name = participantInput.trim()
-    if (!name) return
-    if (extraParticipants.includes(name)) {
-      setParticipantInput('')
-      return
-    }
-    setExtraParticipants((prev) => [...prev, name])
-    setParticipantInput('')
-  }
-
-  const removeParticipant = (name: string) => {
-    setExtraParticipants((prev) => prev.filter((p) => p !== name))
-  }
-
-  const handleParticipantKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      addParticipant()
-    }
-  }
+  }, [user])
 
   const validate = () => {
     const errs: typeof fieldErrors = {}
@@ -80,6 +63,7 @@ export default function CreateEventPage() {
         date: date || null,
         location: location.trim() || null,
         guest_count: guestCount ? parseInt(guestCount, 10) : null,
+        created_by_auth_id: user?.id ?? null,
       })
       .select()
       .single()
@@ -90,10 +74,10 @@ export default function CreateEventPage() {
       return
     }
 
-    // 2. Insert creator as first participant
+    // 2. Insert creator as first participant (linking their auth user ID)
     const { data: creator, error: creatorError } = await supabase
       .from('participants')
-      .insert({ event_id: event.id, name: creatorName.trim() })
+      .insert({ event_id: event.id, name: creatorName.trim(), auth_user_id: user?.id ?? null })
       .select()
       .single()
 
@@ -103,35 +87,16 @@ export default function CreateEventPage() {
       return
     }
 
-    // 3. Insert any additional participants
-    if (extraParticipants.length > 0) {
-      await supabase.from('participants').insert(
-        extraParticipants.map((name) => ({ event_id: event.id, name }))
-      )
-    }
-
-    // 4. Update event with created_by now that we have the creator's participant_id
+    // 3. Update event with created_by now that we have the creator's participant_id
     await supabase
       .from('events')
       .update({ created_by: creator.id })
       .eq('id', event.id)
 
-    // 5. Persist to localStorage
-    localStorage.setItem(participantKey(event.id), creator.id)
-    localStorage.setItem(creatorKey(event.id), creator.id)
-    localStorage.setItem(NAME_KEY, creatorName.trim())
-    upsertVisited({
-      id: event.id,
-      name: eventName.trim(),
-      role: 'creator',
-      visitedAt: new Date().toISOString(),
-    })
-
     setLoading(false)
     navigate(`/event/${event.id}`)
   }
 
-  const creatorDisplayName = creatorName.trim()
   const canSubmit = creatorName.trim() && eventName.trim() && !loading
 
   return (
@@ -221,65 +186,6 @@ export default function CreateEventPage() {
               className={inputClass(false)}
             />
           </Field>
-        </Section>
-
-        {/* ── Participants ─────────────────────────────────── */}
-        <Section title="Participants" subtitle="Add people who'll be part of this event">
-          {/* Pill list */}
-          {(creatorDisplayName || extraParticipants.length > 0) && (
-            <div className="flex flex-wrap gap-2 mb-3">
-              {/* Creator pill — permanent */}
-              {creatorDisplayName && (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-accent-100 text-accent-800 text-sm font-medium rounded-full">
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent-500 shrink-0" />
-                  {creatorDisplayName}
-                  <span className="text-xs text-accent-500 font-normal">(you)</span>
-                </span>
-              )}
-              {/* Extra participant pills */}
-              {extraParticipants.map((name) => (
-                <span
-                  key={name}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-700 text-sm font-medium rounded-full"
-                >
-                  {name}
-                  <button
-                    type="button"
-                    onClick={() => removeParticipant(name)}
-                    className="text-gray-400 hover:text-gray-600 transition-colors ml-0.5 -mr-0.5"
-                    aria-label={`Remove ${name}`}
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Add participant input */}
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={participantInput}
-              onChange={(e) => setParticipantInput(e.target.value)}
-              onKeyDown={handleParticipantKeyDown}
-              placeholder="Add a participant…"
-              className="flex-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
-            />
-            <button
-              type="button"
-              onClick={addParticipant}
-              disabled={!participantInput.trim()}
-              className="px-4 py-2.5 text-sm font-semibold text-accent-600 border border-accent-200 hover:bg-accent-50 disabled:opacity-40 disabled:cursor-default rounded-xl transition-colors shrink-0"
-            >
-              Add
-            </button>
-          </div>
-          <p className="text-xs text-gray-400 mt-2">
-            Press Enter or tap Add. You can always add more people later.
-          </p>
         </Section>
 
         {/* Global error */}
