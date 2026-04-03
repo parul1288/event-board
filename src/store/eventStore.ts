@@ -7,6 +7,7 @@ import type {
   DecisionOption,
   Vote,
   Assignment,
+  TaskCategory,
   Expense,
 } from '../types'
 
@@ -24,7 +25,16 @@ interface EventStore {
   decisionOptions: DecisionOption[]
   decisionVotes: Vote[]
   decisionsLoading: boolean
+  decisionsError: string | null
   currentParticipantId: string | null
+
+  // ── Tasks state ───────────────────────────────────────────────────────────
+  tasksLoading: boolean
+  tasksError: string | null
+
+  // ── Expenses state ────────────────────────────────────────────────────────
+  expensesLoading: boolean
+  expensesError: string | null
 
   // ── Core event actions ────────────────────────────────────────────────────
   fetchEvent: (id: string) => Promise<void>
@@ -39,11 +49,35 @@ interface EventStore {
     title: string,
     allowMultiple: boolean,
     optionTitles: string[]
-  ) => Promise<void>
+  ) => Promise<boolean>
+  deleteDecision: (decisionId: string) => Promise<void>
   castVote: (optionId: string, decisionId: string) => Promise<void>
   lockDecision: (decisionId: string) => Promise<void>
   reopenDecision: (decisionId: string) => Promise<void>
   setCurrentParticipant: (id: string | null) => void
+
+  // ── Task actions ──────────────────────────────────────────────────────────
+  createAssignment: (
+    eventId: string,
+    item: string,
+    category: TaskCategory | null,
+    assignedTo: string | null
+  ) => Promise<boolean>
+  assignTask: (assignmentId: string, participantId: string) => Promise<void>
+  unassignTask: (assignmentId: string) => Promise<void>
+  deleteTask: (assignmentId: string) => Promise<void>
+
+  // ── Expense actions ───────────────────────────────────────────────────────
+  createExpense: (
+    eventId: string,
+    item: string,
+    amount: number,
+    paidBy: string
+  ) => Promise<boolean>
+  deleteExpense: (expenseId: string) => Promise<void>
+
+  // ── Participant actions ───────────────────────────────────────────────────
+  addParticipant: (eventId: string, name: string) => Promise<void>
 
   clearEvent: () => void
 }
@@ -59,6 +93,11 @@ export const useEventStore = create<EventStore>((set, get) => ({
   expenses: [],
   loading: false,
   decisionsLoading: false,
+  decisionsError: null,
+  tasksLoading: false,
+  tasksError: null,
+  expensesLoading: false,
+  expensesError: null,
   error: null,
   currentParticipantId: null,
 
@@ -88,27 +127,33 @@ export const useEventStore = create<EventStore>((set, get) => ({
   },
 
   fetchAssignments: async (eventId) => {
+    set({ tasksLoading: true, tasksError: null })
     const { data, error } = await supabase
       .from('assignments')
       .select('*')
       .eq('event_id', eventId)
       .order('created_at', { ascending: false })
-    if (!error && data) set({ assignments: data })
+    if (error) set({ tasksError: 'fetch_failed' })
+    else if (data) set({ assignments: data })
+    set({ tasksLoading: false })
   },
 
   fetchExpenses: async (eventId) => {
+    set({ expensesLoading: true, expensesError: null })
     const { data, error } = await supabase
       .from('expenses')
       .select('*')
       .eq('event_id', eventId)
       .order('created_at', { ascending: false })
-    if (!error && data) set({ expenses: data })
+    if (error) set({ expensesError: 'fetch_failed' })
+    else if (data) set({ expenses: data })
+    set({ expensesLoading: false })
   },
 
   // ── Decisions: fetch ──────────────────────────────────────────────────────
 
   fetchDecisions: async (eventId) => {
-    set({ decisionsLoading: true })
+    set({ decisionsLoading: true, decisionsError: null })
 
     const { data: decisions, error } = await supabase
       .from('decisions')
@@ -117,7 +162,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
       .order('created_at', { ascending: false })
 
     if (error || !decisions) {
-      set({ decisionsLoading: false })
+      set({ decisionsLoading: false, decisionsError: 'fetch_failed' })
       return
     }
 
@@ -172,22 +217,37 @@ export const useEventStore = create<EventStore>((set, get) => ({
 
     if (error || !decision) {
       console.error('[createDecision] decision insert failed:', error)
-      return
+      return false
     }
 
     const optionsPayload = optionTitles.map((t) => ({ decision_id: decision.id, label: t }))
-    console.log('[createDecision] inserting options:', optionsPayload)
-
     const { error: optionsError } = await supabase
       .from('decision_options')
       .insert(optionsPayload)
 
     if (optionsError) {
       console.error('[createDecision] options insert failed:', optionsError)
+      return false
     }
 
     // Full re-fetch to populate options + votes in one pass
     await get().fetchDecisions(eventId)
+    return true
+  },
+
+  deleteDecision: async (decisionId) => {
+    const { error } = await supabase.from('decisions').delete().eq('id', decisionId)
+    if (error) return
+    set((state) => {
+      const removedOptionIds = new Set(
+        state.decisionOptions.filter((o) => o.decision_id === decisionId).map((o) => o.id)
+      )
+      return {
+        decisions: state.decisions.filter((d) => d.id !== decisionId),
+        decisionOptions: state.decisionOptions.filter((o) => o.decision_id !== decisionId),
+        decisionVotes: state.decisionVotes.filter((v) => !removedOptionIds.has(v.decision_option_id)),
+      }
+    })
   },
 
   // ── Decisions: vote ───────────────────────────────────────────────────────
@@ -272,6 +332,110 @@ export const useEventStore = create<EventStore>((set, get) => ({
   },
 
   setCurrentParticipant: (id) => set({ currentParticipantId: id }),
+
+  // ── Participants ──────────────────────────────────────────────────────────
+
+  addParticipant: async (eventId, name) => {
+    const { data, error } = await supabase
+      .from('participants')
+      .insert({ event_id: eventId, name })
+      .select()
+      .single()
+    if (error || !data) {
+      console.error('[addParticipant] insert failed:', error)
+      return
+    }
+    set((state) => ({ participants: [...state.participants, data] }))
+  },
+
+  // ── Task actions ──────────────────────────────────────────────────────────
+
+  createAssignment: async (eventId, item, category, assignedTo) => {
+    const { data, error } = await supabase
+      .from('assignments')
+      .insert({
+        event_id: eventId,
+        item,
+        category,
+        assigned_to: assignedTo,
+        status: 'todo',
+      })
+      .select()
+      .single()
+    if (error || !data) {
+      console.error('[createAssignment] insert failed:', error)
+      return false
+    }
+    set((state) => ({ assignments: [data, ...state.assignments] }))
+    return true
+  },
+
+  assignTask: async (assignmentId, participantId) => {
+    const { error } = await supabase
+      .from('assignments')
+      .update({ assigned_to: participantId })
+      .eq('id', assignmentId)
+    if (error) return
+    set((state) => ({
+      assignments: state.assignments.map((a) =>
+        a.id === assignmentId ? { ...a, assigned_to: participantId } : a
+      ),
+    }))
+  },
+
+  unassignTask: async (assignmentId) => {
+    const { error } = await supabase
+      .from('assignments')
+      .update({ assigned_to: null })
+      .eq('id', assignmentId)
+    if (error) return
+    set((state) => ({
+      assignments: state.assignments.map((a) =>
+        a.id === assignmentId ? { ...a, assigned_to: null } : a
+      ),
+    }))
+  },
+
+  deleteTask: async (assignmentId) => {
+    const { error } = await supabase
+      .from('assignments')
+      .delete()
+      .eq('id', assignmentId)
+    if (error) return
+    set((state) => ({
+      assignments: state.assignments.filter((a) => a.id !== assignmentId),
+    }))
+  },
+
+  // ── Expense actions ───────────────────────────────────────────────────────
+
+  createExpense: async (eventId, item, amount, paidBy) => {
+    const { data, error } = await supabase
+      .from('expenses')
+      .insert({
+        event_id: eventId,
+        item,
+        amount,
+        paid_by: paidBy,
+      })
+      .select()
+      .single()
+    if (error || !data) {
+      console.error('[createExpense] insert failed:', error)
+      return false
+    }
+    set((state) => ({ expenses: [data, ...state.expenses] }))
+    return true
+  },
+
+  deleteExpense: async (expenseId) => {
+    const { error } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', expenseId)
+    if (error) return
+    set((state) => ({ expenses: state.expenses.filter((e) => e.id !== expenseId) }))
+  },
 
   // ── Clear ─────────────────────────────────────────────────────────────────
 

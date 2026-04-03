@@ -364,7 +364,7 @@ function JoinSheet({ isOpen, onClose, onSuccess }: JoinSheetProps) {
       .single()
     setLoading(false)
     if (error || !data) {
-      setError('Event not found. Double-check your invite code.')
+      setError('Event not found. Check the code and try again.')
       return
     }
     onSuccess(data.id, data.name)

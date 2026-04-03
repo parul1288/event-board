@@ -9,6 +9,7 @@ import EventBoard from './pages/EventBoard'
 import DecisionsPage from './pages/DecisionsPage'
 import AssignmentsPage from './pages/AssignmentsPage'
 import ExpensesPage from './pages/ExpensesPage'
+import ParticipantsPage from './pages/ParticipantsPage'
 
 const router = createBrowserRouter([
   {
@@ -34,6 +35,10 @@ const router = createBrowserRouter([
   {
     path: '/event/:id/expenses',
     element: <ExpensesPage />,
+  },
+  {
+    path: '/event/:id/participants',
+    element: <ParticipantsPage />,
   },
 ])
 

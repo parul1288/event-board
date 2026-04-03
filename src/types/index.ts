@@ -6,6 +6,7 @@ export interface Event {
   date: string | null
   location: string | null
   guest_count: number | null
+  created_by: string | null
   created_at: string
 }
 
@@ -39,10 +40,13 @@ export interface Vote {
   created_at: string
 }
 
+export type TaskCategory = 'Food' | 'Decor' | 'Supplies' | 'Logistics' | 'Other'
+
 export interface Assignment {
   id: string
   event_id: string
-  title: string
+  item: string
+  category: TaskCategory | null
   description: string | null
   assigned_to: string | null
   status: 'todo' | 'in_progress' | 'done'
@@ -53,9 +57,8 @@ export interface Assignment {
 export interface Expense {
   id: string
   event_id: string
-  title: string
+  item: string
   amount: number
   paid_by: string
-  split_among: string[]
   created_at: string
 }

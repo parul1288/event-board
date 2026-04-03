@@ -3,6 +3,7 @@
 export const VISITED_KEY = 'eb_visited_events'
 export const NAME_KEY = 'eb_user_name'
 export const participantKey = (eventId: string) => `eb_participant_${eventId}`
+export const creatorKey = (eventId: string) => `eb_creator_${eventId}`
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

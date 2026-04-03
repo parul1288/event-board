@@ -2,25 +2,43 @@ import { useEffect, useState, useRef, KeyboardEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import { useEventStore } from '../store/eventStore'
 import { supabase } from '../lib/supabase'
-import { participantKey } from '../lib/storage'
+import { participantKey, creatorKey } from '../lib/storage'
 import Layout from '../components/Layout'
-import type { Decision, DecisionOption, Participant } from '../types'
+import WhoAreYouModal from '../components/WhoAreYouModal'
+import type { Decision, DecisionOption } from '../types'
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DecisionsPage() {
   const { id: eventId } = useParams<{ id: string }>()
   const {
+    currentEvent,
     decisions,
     decisionOptions,
     decisionVotes,
     participants,
     decisionsLoading,
+    decisionsError,
     currentParticipantId,
+    fetchEvent,
     fetchDecisions,
     fetchParticipants,
     setCurrentParticipant,
   } = useEventStore()
+
+  // Creator detection: check localStorage key first, then fall back to currentEvent.created_by
+  const storedCreatorId = eventId ? localStorage.getItem(creatorKey(eventId)) : null
+  const isCreator =
+    !!currentParticipantId &&
+    !!(storedCreatorId === currentParticipantId || currentEvent?.created_by === currentParticipantId)
+
+  // Persist creator status to localStorage whenever we can confirm it via the event record
+  useEffect(() => {
+    if (!eventId || !currentParticipantId || !currentEvent?.created_by) return
+    if (currentEvent.created_by === currentParticipantId) {
+      localStorage.setItem(creatorKey(eventId), currentParticipantId)
+    }
+  }, [currentEvent?.created_by, currentParticipantId, eventId])
 
   const [showNewDecision, setShowNewDecision] = useState(false)
   const [showWhoAreYou, setShowWhoAreYou] = useState(false)
@@ -40,6 +58,7 @@ export default function DecisionsPage() {
     if (!eventId) return
     const stored = localStorage.getItem(participantKey(eventId))
     if (stored) setCurrentParticipant(stored)
+    fetchEvent(eventId)
     fetchDecisions(eventId)
     fetchParticipants(eventId)
   }, [eventId])
@@ -54,6 +73,10 @@ export default function DecisionsPage() {
     if (!eventId) return
     localStorage.setItem(participantKey(eventId), participantId)
     setCurrentParticipant(participantId)
+    // Persist creator status if this participant is the event creator
+    if (currentEvent?.created_by === participantId) {
+      localStorage.setItem(creatorKey(eventId), participantId)
+    }
     setShowWhoAreYou(false)
   }
 
@@ -116,6 +139,16 @@ export default function DecisionsPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           </button>
+        )}
+
+        {/* Fetch error */}
+        {decisionsError && (
+          <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-100 rounded-xl text-sm text-red-600">
+            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Something went wrong. Pull down to refresh.
+          </div>
         )}
 
         {/* Header */}
@@ -191,6 +224,7 @@ export default function DecisionsPage() {
                   isExpanded={expandedId === d.id}
                   onToggle={() => handleToggle(d.id)}
                   onVoteAttempt={handleVoteAttempt}
+                  isCreator={isCreator}
                 />
               ))}
             </div>
@@ -215,6 +249,7 @@ export default function DecisionsPage() {
                   isExpanded={expandedId === d.id}
                   onToggle={() => handleToggle(d.id)}
                   onVoteAttempt={handleVoteAttempt}
+                  isCreator={isCreator}
                 />
               ))}
             </div>
@@ -253,6 +288,7 @@ interface DecisionCardProps {
   isExpanded: boolean
   onToggle: () => void
   onVoteAttempt: () => void
+  isCreator: boolean
 }
 
 function DecisionCard({
@@ -264,10 +300,13 @@ function DecisionCard({
   isExpanded,
   onToggle,
   onVoteAttempt,
+  isCreator,
 }: DecisionCardProps) {
-  const { castVote, lockDecision, reopenDecision } = useEventStore()
+  const { castVote, lockDecision, reopenDecision, deleteDecision } = useEventStore()
   const [votingOptionId, setVotingOptionId] = useState<string | null>(null)
   const [locking, setLocking] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const isLocked = decision.is_locked
   const votesForDecision = allVotes.filter((v) =>
@@ -312,6 +351,23 @@ function DecisionCard({
     setLocking(false)
   }
 
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setConfirmDelete(true)
+  }
+
+  const handleDeleteConfirm = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setDeleting(true)
+    await deleteDecision(decision.id)
+    setDeleting(false)
+  }
+
+  const handleDeleteCancel = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setConfirmDelete(false)
+  }
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       {/* Collapsed header — always visible, tappable */}
@@ -340,6 +396,19 @@ function DecisionCard({
           </span>
         )}
 
+        {/* Delete button (creator only) */}
+        {isCreator && !confirmDelete && (
+          <button
+            onClick={handleDeleteClick}
+            className="shrink-0 p-1.5 rounded-lg hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors"
+            aria-label="Delete decision"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+        )}
+
         {/* Chevron */}
         <svg
           className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
@@ -348,6 +417,28 @@ function DecisionCard({
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
       </button>
+
+      {/* Delete confirmation row */}
+      {confirmDelete && (
+        <div className="px-4 py-3 bg-red-50 border-t border-red-100 flex items-center justify-between gap-3">
+          <p className="text-sm text-red-700 font-medium">Delete this decision?</p>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleDeleteCancel}
+              className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDeleteConfirm}
+              disabled={deleting}
+              className="text-xs font-semibold text-white bg-red-500 hover:bg-red-600 disabled:opacity-60 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              {deleting ? 'Deleting…' : 'Delete'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Expanded body */}
       {isExpanded && (
@@ -571,8 +662,12 @@ function NewDecisionModal({ isOpen, onClose, eventId }: NewDecisionModalProps) {
 
     setSubmitting(true)
     setError(null)
-    await createDecision(eventId, q, allowMultiple, validOptions)
+    const ok = await createDecision(eventId, q, allowMultiple, validOptions)
     setSubmitting(false)
+    if (!ok) {
+      setError("Couldn't save. Please try again.")
+      return
+    }
     onClose()
   }
 
@@ -710,108 +805,5 @@ function NewDecisionModal({ isOpen, onClose, eventId }: NewDecisionModalProps) {
         </button>
       </div>
     </div>
-  )
-}
-
-// ─── Who Are You modal (bottom sheet) ─────────────────────────────────────────
-
-interface WhoAreYouModalProps {
-  isOpen: boolean
-  onClose: () => void
-  participants: Participant[]
-  onSelect: (id: string) => void
-  onAdd: (name: string) => Promise<void>
-}
-
-function WhoAreYouModal({
-  isOpen,
-  onClose,
-  participants,
-  onSelect,
-  onAdd,
-}: WhoAreYouModalProps) {
-  const [newName, setNewName] = useState('')
-  const [adding, setAdding] = useState(false)
-
-  const handleAdd = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const name = newName.trim()
-    if (!name) return
-    setAdding(true)
-    await onAdd(name)
-    setAdding(false)
-    setNewName('')
-  }
-
-  return (
-    <>
-      <div
-        className={`fixed inset-0 bg-black/40 z-20 transition-opacity duration-200 ${
-          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-        onClick={onClose}
-      />
-      <div
-        className={`fixed bottom-0 inset-x-0 bg-white rounded-t-2xl z-30 transition-transform duration-300 ease-out ${
-          isOpen ? 'translate-y-0' : 'translate-y-full'
-        }`}
-      >
-        {/* Handle */}
-        <div className="flex justify-center pt-3 pb-1">
-          <div className="w-10 h-1 rounded-full bg-gray-300" />
-        </div>
-
-        <div className="px-4 pt-2 pb-2">
-          <h2 className="text-base font-semibold text-gray-900">Who are you?</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Select your name to vote on decisions</p>
-        </div>
-
-        <div className="px-4 pb-8 max-h-[65vh] overflow-y-auto space-y-3">
-          {/* Existing participants */}
-          {participants.length > 0 && (
-            <div className="space-y-2">
-              {participants.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => onSelect(p.id)}
-                  className="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 hover:bg-accent-50 border border-gray-200 hover:border-accent-300 rounded-xl transition-colors text-left"
-                >
-                  <span className="w-8 h-8 rounded-full bg-accent-100 text-accent-700 text-sm font-bold flex items-center justify-center shrink-0">
-                    {p.name[0].toUpperCase()}
-                  </span>
-                  <span className="text-sm font-medium text-gray-800">{p.name}</span>
-                  <svg className="w-4 h-4 text-gray-300 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Add yourself */}
-          <div className={participants.length > 0 ? 'pt-1 border-t border-gray-100' : ''}>
-            <p className="text-xs font-medium text-gray-500 mb-2">
-              {participants.length > 0 ? "Not listed? Add yourself:" : "Add your name:"}
-            </p>
-            <form onSubmit={handleAdd} className="flex gap-2">
-              <input
-                type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Your name"
-                className="flex-1 px-3 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
-              />
-              <button
-                type="submit"
-                disabled={!newName.trim() || adding}
-                className="px-4 py-2.5 bg-accent-600 hover:bg-accent-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors shrink-0"
-              >
-                {adding ? '…' : 'Join'}
-              </button>
-            </form>
-          </div>
-        </div>
-      </div>
-    </>
   )
 }

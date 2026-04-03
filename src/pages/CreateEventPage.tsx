@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { upsertVisited, NAME_KEY, participantKey } from '../lib/storage'
+import { upsertVisited, NAME_KEY, participantKey, creatorKey } from '../lib/storage'
 
 export default function CreateEventPage() {
   const navigate = useNavigate()
@@ -110,8 +110,15 @@ export default function CreateEventPage() {
       )
     }
 
-    // 4. Persist to localStorage
+    // 4. Update event with created_by now that we have the creator's participant_id
+    await supabase
+      .from('events')
+      .update({ created_by: creator.id })
+      .eq('id', event.id)
+
+    // 5. Persist to localStorage
     localStorage.setItem(participantKey(event.id), creator.id)
+    localStorage.setItem(creatorKey(event.id), creator.id)
     localStorage.setItem(NAME_KEY, creatorName.trim())
     upsertVisited({
       id: event.id,
