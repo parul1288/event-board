@@ -66,6 +66,7 @@ interface EventStore {
   assignTask: (assignmentId: string, participantId: string) => Promise<void>
   unassignTask: (assignmentId: string) => Promise<void>
   deleteTask: (assignmentId: string) => Promise<void>
+  updateAssignment: (id: string, item: string, category: TaskCategory | null) => Promise<boolean>
 
   // ── Expense actions ───────────────────────────────────────────────────────
   createExpense: (
@@ -75,6 +76,11 @@ interface EventStore {
     paidBy: string
   ) => Promise<boolean>
   deleteExpense: (expenseId: string) => Promise<void>
+  updateExpense: (id: string, item: string, amount: number, paidBy: string) => Promise<boolean>
+
+  // ── Decision edit actions ─────────────────────────────────────────────────
+  updateDecisionQuestion: (decisionId: string, question: string) => Promise<void>
+  addDecisionOption: (decisionId: string, label: string) => Promise<boolean>
 
   // ── Participant actions ───────────────────────────────────────────────────
   addParticipant: (eventId: string, name: string) => Promise<void>
@@ -407,6 +413,23 @@ export const useEventStore = create<EventStore>((set, get) => ({
     }))
   },
 
+  updateAssignment: async (id, item, category) => {
+    const { error } = await supabase
+      .from('assignments')
+      .update({ item, category })
+      .eq('id', id)
+    if (error) {
+      console.error('[updateAssignment] failed:', error)
+      return false
+    }
+    set((state) => ({
+      assignments: state.assignments.map((a) =>
+        a.id === id ? { ...a, item, category } : a
+      ),
+    }))
+    return true
+  },
+
   // ── Expense actions ───────────────────────────────────────────────────────
 
   createExpense: async (eventId, item, amount, paidBy) => {
@@ -435,6 +458,53 @@ export const useEventStore = create<EventStore>((set, get) => ({
       .eq('id', expenseId)
     if (error) return
     set((state) => ({ expenses: state.expenses.filter((e) => e.id !== expenseId) }))
+  },
+
+  updateExpense: async (id, item, amount, paidBy) => {
+    const { error } = await supabase
+      .from('expenses')
+      .update({ item, amount, paid_by: paidBy })
+      .eq('id', id)
+    if (error) {
+      console.error('[updateExpense] failed:', error)
+      return false
+    }
+    set((state) => ({
+      expenses: state.expenses.map((e) =>
+        e.id === id ? { ...e, item, amount, paid_by: paidBy } : e
+      ),
+    }))
+    return true
+  },
+
+  updateDecisionQuestion: async (decisionId, question) => {
+    const { error } = await supabase
+      .from('decisions')
+      .update({ question })
+      .eq('id', decisionId)
+    if (error) {
+      console.error('[updateDecisionQuestion] failed:', error)
+      return
+    }
+    set((state) => ({
+      decisions: state.decisions.map((d) =>
+        d.id === decisionId ? { ...d, question } : d
+      ),
+    }))
+  },
+
+  addDecisionOption: async (decisionId, label) => {
+    const { data, error } = await supabase
+      .from('decision_options')
+      .insert({ decision_id: decisionId, label })
+      .select()
+      .single()
+    if (error || !data) {
+      console.error('[addDecisionOption] failed:', error)
+      return false
+    }
+    set((state) => ({ decisionOptions: [...state.decisionOptions, data] }))
+    return true
   },
 
   // ── Clear ─────────────────────────────────────────────────────────────────

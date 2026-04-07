@@ -245,11 +245,23 @@ function DecisionCard({
   onVoteAttempt,
   isCreator,
 }: DecisionCardProps) {
-  const { castVote, lockDecision, reopenDecision, deleteDecision } = useEventStore()
+  const { castVote, lockDecision, reopenDecision, deleteDecision, updateDecisionQuestion, addDecisionOption } = useEventStore()
   const [votingOptionId, setVotingOptionId] = useState<string | null>(null)
   const [locking, setLocking] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  // Question editing
+  const [editingQuestion, setEditingQuestion] = useState(false)
+  const [editedQuestion, setEditedQuestion] = useState(decision.question)
+  const [savingQuestion, setSavingQuestion] = useState(false)
+  const questionInputRef = useRef<HTMLInputElement>(null)
+
+  // Add option
+  const [showAddOption, setShowAddOption] = useState(false)
+  const [newOptionText, setNewOptionText] = useState('')
+  const [addingOption, setAddingOption] = useState(false)
+  const newOptionInputRef = useRef<HTMLInputElement>(null)
 
   const isLocked = decision.is_locked
   const votesForDecision = allVotes.filter((v) =>
@@ -311,39 +323,73 @@ function DecisionCard({
     setConfirmDelete(false)
   }
 
+  const handleSaveQuestion = async () => {
+    const q = editedQuestion.trim()
+    if (!q || q === decision.question) {
+      setEditingQuestion(false)
+      setEditedQuestion(decision.question)
+      return
+    }
+    setSavingQuestion(true)
+    await updateDecisionQuestion(decision.id, q)
+    setSavingQuestion(false)
+    setEditingQuestion(false)
+  }
+
+  const handleAddOption = async () => {
+    const label = newOptionText.trim()
+    if (!label) return
+    setAddingOption(true)
+    await addDecisionOption(decision.id, label)
+    setAddingOption(false)
+    setNewOptionText('')
+    setShowAddOption(false)
+  }
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      {/* Collapsed header — always visible, tappable */}
-      <button
-        onClick={onToggle}
-        className="w-full text-left px-4 py-3.5 flex items-center gap-3"
-      >
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900 leading-snug">{decision.question}</p>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {totalVotes} {totalVotes === 1 ? 'vote' : 'votes'}
-          </p>
+      {/* Collapsed header — always visible */}
+      <div className="flex items-center">
+        {/* Clickable toggle area */}
+        <div
+          onClick={onToggle}
+          className="flex-1 min-w-0 flex items-center gap-3 px-4 py-3.5 cursor-pointer select-none"
+        >
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-gray-900 leading-snug">{decision.question}</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {totalVotes} {totalVotes === 1 ? 'vote' : 'votes'}
+            </p>
+          </div>
+
+          {/* Status badge */}
+          {isLocked ? (
+            <span className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+              </svg>
+              Decided
+            </span>
+          ) : (
+            <span className="shrink-0 text-xs font-medium px-2 py-0.5 rounded-full bg-accent-100 text-accent-700">
+              Open
+            </span>
+          )}
+
+          {/* Chevron */}
+          <svg
+            className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
         </div>
 
-        {/* Status badge */}
-        {isLocked ? (
-          <span className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
-            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-            </svg>
-            Decided
-          </span>
-        ) : (
-          <span className="shrink-0 text-xs font-medium px-2 py-0.5 rounded-full bg-accent-100 text-accent-700">
-            Open
-          </span>
-        )}
-
-        {/* Delete button (creator only) */}
+        {/* Delete button — sibling of toggle, not nested inside it */}
         {isCreator && !confirmDelete && (
           <button
             onClick={handleDeleteClick}
-            className="shrink-0 p-1.5 rounded-lg hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors"
+            className="shrink-0 p-2 mr-2 rounded-lg hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors"
             aria-label="Delete decision"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -351,15 +397,7 @@ function DecisionCard({
             </svg>
           </button>
         )}
-
-        {/* Chevron */}
-        <svg
-          className={`w-4 h-4 text-gray-400 shrink-0 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
+      </div>
 
       {/* Delete confirmation row */}
       {confirmDelete && (
@@ -386,6 +424,43 @@ function DecisionCard({
       {/* Expanded body */}
       {isExpanded && (
         <div className="border-t border-gray-100 px-4 pb-4 pt-3">
+
+          {/* Inline question editor — creator, unlocked only */}
+          {isCreator && !isLocked && (
+            <div className="mb-3">
+              {editingQuestion ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={questionInputRef}
+                    value={editedQuestion}
+                    onChange={(e) => setEditedQuestion(e.target.value)}
+                    onBlur={handleSaveQuestion}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); handleSaveQuestion() }
+                      if (e.key === 'Escape') { setEditingQuestion(false); setEditedQuestion(decision.question) }
+                    }}
+                    autoFocus
+                    disabled={savingQuestion}
+                    className="flex-1 text-sm font-semibold text-gray-900 bg-gray-50 border border-accent-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:opacity-60"
+                  />
+                  {savingQuestion && (
+                    <span className="w-4 h-4 border-2 border-accent-400 border-t-transparent rounded-full animate-spin shrink-0" />
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => { setEditedQuestion(decision.question); setEditingQuestion(true) }}
+                  className="group/q flex items-center gap-1.5 text-left w-full"
+                >
+                  <span className="text-sm font-semibold text-gray-900 leading-snug flex-1">{decision.question}</span>
+                  <svg className="w-3.5 h-3.5 text-gray-300 group-hover/q:text-accent-500 shrink-0 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Options */}
           <div className="space-y-2.5">
             {options.map((option) => {
@@ -495,6 +570,53 @@ function DecisionCard({
               )
             })}
           </div>
+
+          {/* Add option — creator, unlocked only */}
+          {isCreator && !isLocked && (
+            <div className="mt-2">
+              {showAddOption ? (
+                <div className="flex items-center gap-2 mt-1">
+                  <input
+                    ref={newOptionInputRef}
+                    autoFocus
+                    value={newOptionText}
+                    onChange={(e) => setNewOptionText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newOptionText.trim()) handleAddOption()
+                      if (e.key === 'Escape') { setShowAddOption(false); setNewOptionText('') }
+                    }}
+                    placeholder="New option…"
+                    className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  />
+                  <button
+                    onClick={handleAddOption}
+                    disabled={!newOptionText.trim() || addingOption}
+                    className="px-3 py-2 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 rounded-lg flex items-center gap-1.5"
+                  >
+                    {addingOption ? (
+                      <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    ) : 'Add'}
+                  </button>
+                  <button
+                    onClick={() => { setShowAddOption(false); setNewOptionText('') }}
+                    className="px-2 py-2 text-sm text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowAddOption(true)}
+                  className="flex items-center gap-1.5 text-xs text-accent-600 hover:text-accent-700 font-medium transition-colors mt-1"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add option
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Footer */}
           <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">

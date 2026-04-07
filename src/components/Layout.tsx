@@ -54,8 +54,13 @@ export default function Layout({ children }: LayoutProps) {
   const handleDelete = async () => {
     if (!id) return
     setActionLoading(true)
-    await supabase.from('events').delete().eq('id', id)
+    const { error } = await supabase.from('events').delete().eq('id', id)
     setActionLoading(false)
+    if (error) {
+      console.error('Delete failed:', error)
+      alert('Could not delete event: ' + error.message)
+      return
+    }
     clearEvent()
     closeMenu()
     navigate('/', { replace: true })
