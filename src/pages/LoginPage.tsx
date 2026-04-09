@@ -14,10 +14,16 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const emailRef = useRef<HTMLInputElement>(null)
 
-  // Already signed in — go home
+  // Already signed in — go to saved destination or home
   useEffect(() => {
     if (!loading && user) {
-      navigate('/', { replace: true })
+      const saved = localStorage.getItem('redirectAfterLogin')
+      if (saved) {
+        localStorage.removeItem('redirectAfterLogin')
+        navigate(saved, { replace: true })
+      } else {
+        navigate('/', { replace: true })
+      }
     }
   }, [user, loading])
 

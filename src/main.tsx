@@ -16,6 +16,8 @@ import ParticipantsPage from './pages/ParticipantsPage'
 
 // ─── Auth guard ───────────────────────────────────────────────────────────────
 
+const REDIRECT_KEY = 'redirectAfterLogin'
+
 function RequireAuth() {
   const { user, loading } = useAuth()
 
@@ -28,7 +30,17 @@ function RequireAuth() {
   }
 
   if (!user) {
+    // Save the intended destination so we can return here after login
+    const intended = window.location.pathname + window.location.search
+    localStorage.setItem(REDIRECT_KEY, intended)
     return <Navigate to="/login" replace />
+  }
+
+  // User just logged in — redirect to their intended destination if saved
+  const saved = localStorage.getItem(REDIRECT_KEY)
+  if (saved) {
+    localStorage.removeItem(REDIRECT_KEY)
+    return <Navigate to={saved} replace />
   }
 
   return <Outlet />
